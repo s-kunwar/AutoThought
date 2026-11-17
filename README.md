@@ -1,66 +1,83 @@
-# 🧠 Neural Friction: AI Conviction & Kinetic Debate Engine
+# AutoThought
 
-A real-time simulation of ideological conflict. This engine pairs **Large Language Models (LLMs)** with a **High-DOF Kinematic System** to visualize the physical toll of a heated debate. 
+A real-time two-agent debate desktop application (`CONVICTION ENGINE: ASYNC INTERRUPT`) built with Python, Tkinter, and a local Ollama LLM. Two distinct personas—**ELIAS** and **MAYA**—continuously debate a shared prompt while an asynchronous GUI renders procedural 2D stick-figure animations and streams each response word-by-word.
 
-Unlike standard "helpful" AI assistants, these agents are programmed with **unshakeable convictions**, leading to genuine "Friction"—interruptions, physical agitation, and emotional volatility.
+## How the Asynchronous Debate & Interruption Engine Works
 
+`debate.py` separates rendering from LLM generation and text streaming across two threads inside `RealtimeCollisionGUI`:
 
+1. **Main Tkinter Thread (`root.mainloop()` & `animate_loop`)**
+   - Schedules `animate_loop()` every `30 ms` (~33 FPS) via `self.root.after(30, self.animate_loop)`.
+   - On each tick, clears the `tk.Canvas` and calls `draw_human()` for both `elias` (`x=400`) and `maya` (`x=1000`, `flipped=True`).
 
-## 🚀 The Vision
-The "Neural Friction" engine explores how abstract ideas manifest as physical stress.
-* **Asynchronous Interaction:** Agents do not wait for "turns." They stream text word-by-word and can interrupt each other based on aggression thresholds.
-* **Biometric Animation:** Stick figures utilize 12+ degrees of freedom (Neck, Shoulders, Elbows, Hips, Knees) to express arrogance, defensiveness, or agitation.
-* **Persistent Memory:** Agents track "Grudges"—specific phrases said by the opponent—and bring them back up to mock or counter-argue.
+2. **Background Director Thread (`self.director`)**
+   - Started as a daemon `threading.Thread(target=self.director, daemon=True)` in `__init__`.
+   - Runs an infinite turn loop:
+     1. Selects the next speaker randomly (`random.random() > 0.5` chooses `ELIAS`, otherwise `MAYA`).
+     2. Clears `self.interrupt_event` (`threading.Event()`).
+     3. Sets the active speaker's `"mood"` to `"talking"` and the opponent's `"mood"` to `"neutral"`.
+     4. Calls `ollama.chat(model=MODEL, messages=...)` with the speaker's system persona (`"ACT AS {persona} Max 12 words. Be blunt."`) and `self.current_context` as the user message.
+     5. Updates `self.current_context` to the newly generated response string so the next turn replies directly to it.
+     6. Calls `stream_text(speaker_ui, speaker_state, text)` to append the response word-by-word (`random.uniform(0.08, 0.2)` seconds per word) into the speaker's `tk.Text` pane.
+     7. Resets the speaker's `"mood"` to `"neutral"` and sleeps `random.uniform(1, 2)` seconds before the next turn.
 
----
+3. **Interruption Mechanics (`interrupt_event`)**
+   - Before appending each word in `stream_text()`, the loop checks `if self.interrupt_event.is_set():`.
+   - When set, it appends `"... [CUT OFF]"` (tagged `"meta"`), sets `agent_state["mood"] = "stunned"`, and breaks out of the word stream immediately.
+   - *Current state in `debate.py`:* `self.interrupt_event` and `self.active_speaker` are initialized and checked in `stream_text()`, and `"stunned"` visuals are implemented in `draw_human()`, though no trigger currently calls `self.interrupt_event.set()`.
 
-## 🛠️ Requirements
+## Key Components (`debate.py`)
 
-* **Python 3.8+**
-* **Tkinter** (Standard UI Library)
-* **Ollama** (Required for the "Neural" logic. Suggested model: `smollm2:1.7b` for speed)
+- **`RealtimeCollisionGUI`**
+  - **`__init__(self, root)`**: Configures the `1400x900` dark window (`#050505`), initializes shared debate state (`current_context`, `interrupt_event`, `active_speaker`) and agent state dictionaries (`elias`, `maya`), builds the UI, starts `animate_loop()`, and spawns the `director` daemon thread.
+  - **`setup_ui(self)` & `create_box(self, parent, name, color, side)`**: Creates the top `tk.Canvas` (`height=300`, `#0a0a0a`) and the bottom two-column `tk.Frame` containing labeled, read-only `tk.Text` widgets (`Consolas` 12pt) for `ELIAS` (left) and `MAYA` (right).
+  - **`draw_human(self, x, state, color, flipped=False)`**: Procedurally draws each character using `time.time()` and trigonometric offsets:
+    - **Breathing & sway:** Vertical bob `math.sin(t * 2) * 2` and horizontal sway `math.cos(t * 1.5) * 3`.
+    - **Mouth animation:** Oscillating oval (`abs(math.sin(t * 18)) * 10`) when `mood == "talking"`, a small `"o"` oval when `mood == "stunned"`, and a flat line when `"neutral"`.
+    - **Arm kinematics:** Sets arm angle (`math.radians(...)`) to `140°` (`"talking"`), `40°` (`"stunned"`), or `0°` (`"neutral"`).
+  - **`animate_loop(self)`**: Refreshes the canvas every `30 ms`.
+  - **`stream_text(self, agent_ui, agent_state, text)`**: Streams words into the target `tk.Text` widget with per-word timing jitter and `interrupt_event` checks.
+  - **`director(self)`**: Drives the continuous Ollama conversation loop.
 
----
+## Configuration & Parameters
 
-## 🕹️ Biological Degrees of Freedom (DOF)
+All configuration is defined in `debate.py` (no CLI arguments are used):
 
-The physical agents react in real-time to the sentiment of the conversation:
+| Parameter | Value | Description |
+| --- | --- | --- |
+| `MODEL` | `"smollm2:1.7b"` | Local Ollama model used in `ollama.chat()` |
+| `current_context` | `"The universe is a cold, mathematical accident."` | Initial seed prompt for the debate |
+| `ELIAS` persona | `"Grumpy surgeon, materialist, short sentences."` | System persona (`pos`: `400`, `color`: `#3498db`, initial `hr`: `72`, `anger`: `10`) |
+| `MAYA` persona | `"Spiritual mother, sharp, uses 'u' and 'rly'."` | System persona (`pos`: `1000`, `color`: `#e74c3c`, initial `hr`: `70`, `anger`: `10`) |
+| System prompt constraint | `"Max 12 words. Be blunt."` | Appended to each agent's system prompt |
+| `animate_loop` interval | `30 ms` | Canvas redraw period (~33 FPS) |
+| Word streaming delay | `0.08–0.2 s` | `random.uniform(0.08, 0.2)` per word |
+| Inter-turn pause | `1–2 s` | `random.uniform(1, 2)` after each turn |
 
-| Variable | Physical Manifestation | Trigger |
-| :--- | :--- | :--- |
-| **Ego / Neck** | Head Tilt | High confidence or dismissive tone. |
-| **Anger / Arms** | Gesturing / Pointing | Use of exclamation marks or "Grudge" keywords. |
-| **Stress / Jitter** | Procedural Sway | High Heart Rate (HR) or being interrupted. |
-| **Speech / Mouth** | Mouth Oscillation | Tied directly to the word-by-word text stream. |
+*(Note: `hr` and `anger` values are initialized in `self.elias` and `self.maya`, though they are not dynamically updated or rendered in the current `debate.py`.)*
 
+## Installation & Running
 
+### Prerequisites
+- Python 3 with `tkinter`
+- Ollama installed and running locally
 
----
+### Setup & Launch
+```bash
+git clone https://github.com/s-kunwar/AutoThought
+cd AutoThought
+pip install -r requirements.txt
+ollama pull smollm2:1.7b
+python debate.py
+```
 
-## 🛣️ The Roadmap (Next Path)
+*(Note: `requirements.txt` includes `ollama` as well as additional packages—`chromadb`, `pdfplumber`, `langchain`, `langchain-core`, `langchain-ollama`, `langchain-community`, `langchain_text_splitters`, `unstructured`, `unstructured[all-docs]`, `fastembed`, `pikepdf`, `sentence-transformers`, `elevenlabs`—though `debate.py` currently imports only `tkinter`, `ollama`, `threading`, `time`, `random`, and `math`.)*
 
-We are moving toward a more "Human" simulation by refining the following:
+## Project Structure
 
-* **[ ] Interruption Logic:** Refilling the "Patience Meter." When it hits zero, the listener stops the speaker mid-sentence.
-* **[ ] Voice Stress Visualizer:** Adding jagged waveform lines that react to the "Volume" or "Sharpness" of the text.
-* **[ ] Environmental Tension:** Shaking the UI or dimming the lights as the "Global Tension" variable increases.
-* **[ ] Spatial Awareness:** Having the figures physically lean in or turn away based on the level of agreement.
-
----
-
-## 🤝 Contribution
-
-If you want to help make these AI agents even more "difficult" to talk to:
-
-1. Fork the Project.
-2. Add a new **Physical Action** (e.g., `FACEPALM` or `CROSSED_ARMS`).
-3. Map that action to a specific **NLP Sentiment**.
-4. Open a Pull Request.
-
----
-
-## 🏃 How to Run
-1. Ensure **Ollama** is running with `ollama run smollm2:1.7b`.
-2. Run the main script:
-   ```bash
-   python debate_engine.py
+```text
+AutoThought/
+├── debate.py          # Tkinter GUI, procedural stick-figure animation, Ollama director thread, and word streamer
+├── requirements.txt   # Python dependencies
+└── README.md          # Project documentation
+```
